@@ -1,16 +1,5 @@
 """
 7_param_sensitivity.py
-======================
-超参数敏感性实验：验证 d_model 和 TCN channel 的选择合理性
-实验设计：
-  - d_model   ∈ {64, 128, 256}         （Transformer 嵌入维度）
-  - tcn_ch    ∈ {32, 64, 128}          （TCN 每层 channel 数）
-  - 其余超参全部固定（seed=42, lr=5e-5, window=60）
-
-运行：
-    python 7_param_sensitivity.py
-    python 7_param_sensitivity.py --param dmodel   （只跑 d_model）
-    python 7_param_sensitivity.py --param tcn       （只跑 TCN channel）
 """
 
 import argparse
@@ -26,9 +15,6 @@ warnings.filterwarnings("ignore")
 
 from utils import set_seed, set_plot_style, compute_all_metrics
 
-# ==========================
-# 配置
-# ==========================
 SEED      = 42
 device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 base_path = r"D:\CIKM"
@@ -38,9 +24,6 @@ N_FEAT    = 17
 DMODEL_GRID  = [64, 128, 256]
 TCN_CH_GRID  = [32, 64, 128]
 
-# ==========================
-# 可配置主模型
-# ==========================
 class FeatureAttention(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -51,7 +34,6 @@ class FeatureAttention(nn.Module):
 class LightweightTransformer(nn.Module):
     def __init__(self, dim, d_model):
         super().__init__()
-        # nhead 必须能整除 d_model，自动选最大合法 nhead
         for nhead in [8, 4, 2, 1]:
             if d_model % nhead == 0:
                 break
@@ -90,10 +72,7 @@ class TCNModel(nn.Module):
         return self.linear(self.tcn(x.transpose(1,2))[:,:,-1])
 
 class ConfigurableGatedModel(nn.Module):
-    """
-    可配置版主模型：d_model 和 TCN channel 均可调
-    其余结构与主模型完全相同
-    """
+
     def __init__(self, dim=N_FEAT, d_model=128, tcn_ch=64):
         super().__init__()
         self.fa   = FeatureAttention(dim)
@@ -102,7 +81,6 @@ class ConfigurableGatedModel(nn.Module):
         self.gate = nn.Sequential(nn.Linear(128, 1), nn.Sigmoid())
         self.out  = nn.Linear(64, 1)
 
-        # 记录参数量（论文用）
         self.n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def forward(self, x):
@@ -111,9 +89,6 @@ class ConfigurableGatedModel(nn.Module):
         g  = self.gate(torch.cat([ht, htc], dim=-1))
         return self.out(g * ht + (1-g) * htc), g
 
-# ==========================
-# 数据加载
-# ==========================
 def load_loaders():
     def _dl(Xp, yp, sh):
         X = torch.tensor(np.load(os.path.join(base_path, Xp)), dtype=torch.float32)
@@ -123,9 +98,6 @@ def load_loaders():
             _dl("X_val.npy",  "y_val.npy",  False),
             _dl("X_test.npy", "y_test.npy",  False))
 
-# ==========================
-# 训练
-# ==========================
 def train_config(model, tr, vl, tag, epochs=100):
     model.to(device)
     crit = nn.HuberLoss(delta=0.1)
@@ -163,9 +135,6 @@ def train_config(model, tr, vl, tag, epochs=100):
     if os.path.exists(path): os.remove(path)
     return model
 
-# ==========================
-# 评估
-# ==========================
 def evaluate(model, te, scaler_y):
     model.eval(); preds, targets = [], []
     with torch.no_grad():
@@ -177,13 +146,8 @@ def evaluate(model, te, scaler_y):
     t = np.exp(scaler_y.inverse_transform(np.concatenate(targets))).flatten()
     return compute_all_metrics(t, p)
 
-# ==========================
-# 绘图：双参数敏感性热力图 + 折线图
-# ==========================
 def plot_sensitivity_grid(results_dict, param_name, param_vals, save_path):
-    """
-    results_dict: { param_val: metrics_dict }
-    """
+
     set_plot_style()
     metrics_to_show = ["R2", "QLike", "RMSE"]
     labels = {"R2": "R² ↑", "QLike": "QLike ↓", "RMSE": "RMSE ↓"}
@@ -200,7 +164,6 @@ def plot_sensitivity_grid(results_dict, param_name, param_vals, save_path):
                         textcoords='offset points', xytext=(0, 10),
                         ha='center', fontsize=9)
 
-        # 高亮最优值
         best_idx = int(np.argmax(vals) if metric == "R2" else np.argmin(vals))
         ax.axvline(param_vals[best_idx], color='gray', ls='--', lw=1.5, alpha=0.6,
                    label=f'Best={param_vals[best_idx]}')
@@ -216,12 +179,10 @@ def plot_sensitivity_grid(results_dict, param_name, param_vals, save_path):
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show(); plt.close()
-    print(f"✅ 敏感性图已保存：{save_path}")
+    print(f"敏感性图已保存：{save_path}")
 
 def plot_combined_heatmap(dmodel_results, tcn_results, save_path):
-    """
-    双参数结果对比热力图（论文附图）
-    """
+
     set_plot_style()
     fig, axes = plt.subplots(2, 3, figsize=(15, 9))
 
@@ -249,14 +210,12 @@ def plot_combined_heatmap(dmodel_results, tcn_results, save_path):
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show(); plt.close()
-    print(f"✅ 组合热力图已保存：{save_path}")
+    print(f"组合热力图已保存：{save_path}")
 
-# ==========================
-# 打印表格
-# ==========================
+
 def print_param_table(results, param_vals, param_name, default_val):
     print(f"\n{'='*70}")
-    print(f"📊 {param_name} Sensitivity Results  (default={default_val} ★)")
+    print(f" {param_name} Sensitivity Results  (default={default_val} ★)")
     print(f"{'='*70}")
     print(f"  {param_name:<12} | {'R² ↑':>10} | {'QLike ↓':>10} | "
           f"{'RMSE ↓':>12} | {'#Params':>10}")
@@ -268,17 +227,14 @@ def print_param_table(results, param_vals, param_name, default_val):
               f"{m['RMSE']:>12.4e} | {m.get('n_params', 0):>10,}{tag}")
     print(f"{'='*70}")
 
-# ==========================
-# 主程序
-# ==========================
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--param', type=str, default='all',
                         choices=['dmodel', 'tcn', 'all'])
     args = parser.parse_args()
 
-    print(f"✅ 设备: {device}")
-    print(f"✅ 固定种子: {SEED}（唯一变量是超参）\n")
+    print(f"设备: {device}")
+    print(f"固定种子: {SEED}（唯一变量是超参）\n")
 
     tr, vl, te   = load_loaders()
     scaler_y     = joblib.load(os.path.join(base_path, "scaler_y.pkl"))
@@ -286,10 +242,9 @@ if __name__ == '__main__':
     dmodel_results = {}
     tcn_results    = {}
 
-    # ── d_model 实验 ──
     if args.param in ('dmodel', 'all'):
         print("=" * 55)
-        print("🔄 实验1：d_model 敏感性")
+        print("实验1：d_model 敏感性")
         print("=" * 55)
         for dm in DMODEL_GRID:
             set_seed(SEED)
@@ -308,10 +263,9 @@ if __name__ == '__main__':
                               os.path.join(base_path, "Sensitivity_dmodel.pdf"))
         np.save(os.path.join(base_path, "sensitivity_dmodel.npy"), dmodel_results)
 
-    # ── TCN channel 实验 ──
     if args.param in ('tcn', 'all'):
         print("\n" + "=" * 55)
-        print("🔄 实验2：TCN Channel 敏感性")
+        print("实验2：TCN Channel 敏感性")
         print("=" * 55)
         for ch in TCN_CH_GRID:
             set_seed(SEED)
@@ -330,11 +284,10 @@ if __name__ == '__main__':
                               os.path.join(base_path, "Sensitivity_TCN.pdf"))
         np.save(os.path.join(base_path, "sensitivity_tcn.npy"), tcn_results)
 
-    # ── 组合图（两个都跑完才生成）──
     if args.param == 'all':
         plot_combined_heatmap(dmodel_results, tcn_results,
                               os.path.join(base_path, "Sensitivity_Combined.pdf"))
-        print("\n🎉 参数敏感性实验完成！")
+        print("\n参数敏感性实验完成！")
         print("   d_model 结果 → Sensitivity_dmodel.pdf")
         print("   TCN 结果    → Sensitivity_TCN.pdf")
         print("   组合图      → Sensitivity_Combined.pdf")

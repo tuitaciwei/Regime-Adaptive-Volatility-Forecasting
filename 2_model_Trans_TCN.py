@@ -1,9 +1,5 @@
-
 """
 2_model_Trans_TCN.py
-====================
-主模型：Gated Fusion（Transformer + TCN）+ Feature Attention
-完整流程：加载数据 → 训练 → 评估 → 可视化 → 保存预测
 """
 
 import numpy as np
@@ -23,9 +19,6 @@ from utils import (set_seed, set_plot_style,
                    dm_test, dm_test_hac, random_walk_pred,
                    plot_pred_vs_true)
 
-# ==========================
-# 配置
-# ==========================
 set_seed(42)
 set_plot_style()
 device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -38,11 +31,8 @@ FEATURE_NAMES = [
     "VIX", "YIELD_10Y", "CORP_SPREAD",
     "VIX_ROC", "RET_VOL_INTERACT", "RV_5", "RV_22"
 ]
-N_FEATURES = len(FEATURE_NAMES)   # 17
+N_FEATURES = len(FEATURE_NAMES)
 
-# ==========================
-# 数据加载
-# ==========================
 def load_data():
     def _t(path, unsqueeze=False):
         arr = torch.tensor(np.load(path), dtype=torch.float32)
@@ -60,14 +50,8 @@ def load_data():
     test_loader  = DataLoader(TensorDataset(X_test,  y_test),  batch_size=32, shuffle=False)
     return train_loader, val_loader, test_loader
 
-# ==========================
-# 模型组件
-# ==========================
 class FeatureAttention(nn.Module):
-    """
-    特征级注意力：对每个特征计算时序均值后，学习一组 [0,1] 权重，
-    动态压制低信息量特征，强化高相关特征（如 VIX、RV_5）
-    """
+
     def __init__(self, feature_dim):
         super().__init__()
         self.attn = nn.Sequential(
@@ -81,10 +65,7 @@ class FeatureAttention(nn.Module):
 
 
 class LightweightTransformer(nn.Module):
-    """
-    轻量级 Transformer：捕捉长程依赖和跨时间步的全局注意力
-    d_model=128, 4头注意力，单层编码器（防止过拟合）
-    """
+
     def __init__(self, feature_dim, d_model=128):
         super().__init__()
         self.proj    = nn.Linear(feature_dim, d_model)
@@ -105,7 +86,7 @@ class Chomp1d(nn.Module):
 
 
 class TemporalBlock(nn.Module):
-    """TCN 基本单元：因果膨胀卷积 + weight_norm + Dropout"""
+
     def __init__(self, n_in, n_out, kernel_size, dilation, dropout=0.2):
         super().__init__()
         padding = (kernel_size - 1) * dilation
@@ -120,10 +101,7 @@ class TemporalBlock(nn.Module):
 
 
 class TCNModel(nn.Module):
-    """
-    三层 TCN：感受野 = 1 + (kernel-1)*(1+2+4) = 15 个时间步
-    配合 window=60，捕捉中短期局部时序模式
-    """
+
     def __init__(self, input_size, num_channels=(64, 64, 64), kernel_size=3, dropout=0.2):
         super().__init__()
         layers = []
@@ -139,10 +117,7 @@ class TCNModel(nn.Module):
 
 
 class GatedFusionModel(nn.Module):
-    """
-    主模型：Feature Attention → Transformer + TCN → Gated Fusion → 输出
-    门控机制自适应决定：高波动期偏向 TCN（局部），低波动期偏向 Transformer（全局）
-    """
+
     def __init__(self, feature_dim=N_FEATURES):
         super().__init__()
         self.feature_attn = FeatureAttention(feature_dim)
@@ -159,9 +134,7 @@ class GatedFusionModel(nn.Module):
         fused = g * h_t + (1 - g) * h_tc
         return self.output(fused), g, attn_w
 
-# ==========================
-# 训练
-# ==========================
+
 def train_model(model, train_loader, val_loader, epochs=100, lr=5e-5):
     model.to(device)
     criterion  = nn.HuberLoss(delta=0.1)
@@ -175,7 +148,7 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=5e-5):
     save_path      = os.path.join(base_path, "best_model_Transformer_TCN.pth")
 
     for epoch in range(1, epochs + 1):
-        # —— 训练 ——
+
         model.train()
         train_loss = 0.0
         for xb, yb in train_loader:
@@ -188,7 +161,6 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=5e-5):
             train_loss += loss.item() * xb.size(0)
         train_loss /= len(train_loader.dataset)
 
-        # —— 验证 ——
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
@@ -214,12 +186,9 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=5e-5):
                   f"Val={val_loss:.6f} | LR={optimizer.param_groups[0]['lr']:.2e}")
 
     model.load_state_dict(torch.load(save_path, map_location=device))
-    print(f"  ✅ Best val loss: {best_val:.6f}")
+    print(f" Best val loss: {best_val:.6f}")
     return model
 
-# ==========================
-# 推理：收集预测值 + 门控值 + 注意力权重
-# ==========================
 def predict(model, loader):
     model.eval()
     preds, targets, gates, attns = [], [], [], []
@@ -236,16 +205,9 @@ def predict(model, loader):
             np.concatenate(gates).flatten(),
             np.concatenate(attns))
 
-# ==========================
-# 还原真实量纲
-# ==========================
 def inverse_transform(arr_scaled, scaler_y):
-    """标准化逆变换 + exp 还原（目标是 log-volatility）"""
     return np.exp(scaler_y.inverse_transform(arr_scaled)).flatten()
 
-# ==========================
-# 绘图：DM 对比表（全模型）
-# ==========================
 def run_dm_table(t_real, p_real):
     baselines = {
         "GARCH":       "preds_garch.npy",
@@ -255,8 +217,8 @@ def run_dm_table(t_real, p_real):
         "Transformer": "preds_transformer.npy",
     }
     print("\n" + "=" * 95)
-    print("📊 DIEBOLD-MARIANO TEST (QLIKE-based) | Trans-TCN vs Baselines")
-    print("   Raw DM + HAC-Newey-West Adjusted")
+    print(" DIEBOLD-MARIANO TEST (QLIKE-based) | Trans-TCN vs Baselines")
+    print(" Raw DM + HAC-Newey-West Adjusted")
     print("=" * 95)
     print(f"{'Comparison':<22} | {'DM-Raw':>8} | {'p-Raw':>8} | "
           f"{'DM-HAC':>8} | {'p-HAC':>8} | {'Sig-Raw':>8} | {'Sig-HAC'}")
@@ -268,7 +230,7 @@ def run_dm_table(t_real, p_real):
     for name, fn in baselines.items():
         fp = os.path.join(base_path, fn)
         if not os.path.exists(fp):
-            print(f"  ⚠️  {fn} 不存在，跳过")
+            print(f" {fn} 不存在，跳过")
             continue
         bp = np.load(fp).flatten()
         n  = min(len(t_real), len(p_real), len(bp))
@@ -281,11 +243,7 @@ def run_dm_table(t_real, p_real):
               f"{stat_h:>8.4f} | {p_h:>8.4f} | {sig(p_r):>8} | {sig(p_h)}")
     print("=" * 95)
 
-# ==========================
-# 绘图函数集
-# ==========================
 def plot_zoom(true, pred):
-    """局部放大对比（稳定期 vs 高波动期）"""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 4))
     mid = len(true) // 3
     ax1.plot(true[mid:mid+200], c='#000080', lw=2, label='True')
@@ -303,7 +261,6 @@ def plot_zoom(true, pred):
     plt.show(); plt.close()
 
 def plot_gate(gate, true):
-    """门控权重 + 真实波动率双轴图"""
     fig, ax1 = plt.subplots(figsize=(14, 5))
     ax1.plot(gate, c='#B22222', lw=1.2, label='Gate weight (→Transformer)')
     ax1.axhline(0.5, c='k', ls='--', alpha=0.5, lw=1)
@@ -323,7 +280,6 @@ def plot_gate(gate, true):
     plt.show(); plt.close()
 
 def plot_attn_heatmap(attn_weights):
-    """特征注意力热力图（前300个测试样本）"""
     plt.figure(figsize=(16, 6))
     sns.heatmap(attn_weights[:300].T,
                 cmap='magma',
@@ -336,7 +292,6 @@ def plot_attn_heatmap(attn_weights):
     plt.show(); plt.close()
 
 def plot_rmse_bar(true, ours_pred):
-    """RMSE 对比柱状图"""
     from sklearn.metrics import mean_squared_error
     baselines = {
         "GARCH":       "preds_garch.npy",
@@ -372,10 +327,6 @@ def plot_rmse_bar(true, ours_pred):
     plt.show(); plt.close()
 
 def plot_window_sensitivity(windows, r2_list, qlike_list):
-    """
-    窗口敏感性分析图
-    windows / r2_list / qlike_list 来自 sensitivity_experiment.py 的真实结果
-    """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
     ax1.plot(windows, r2_list, marker='o', c='#B22222', lw=2)
@@ -401,19 +352,7 @@ def plot_window_sensitivity(windows, r2_list, qlike_list):
     plt.savefig(f"{base_path}\\Window_Sensitivity.pdf", dpi=300)
     plt.show(); plt.close()
 
-# ==========================
-# 补充到 2_model_Trans_TCN.py 末尾
-# 在 if __name__ == '__main__': 的最后调用 plot_case_study(t_real, p_real)
-# ==========================
-
 def plot_case_study(true, pred, save_dir=base_path):
-    """
-    案例分析：对比主模型在两个极端行情期的预测表现
-    需要 final_processed_data.csv 提供日期索引
-
-    调用方式（加在主程序末尾）：
-        plot_case_study(t_real, p_real)
-    """
     import pandas as pd
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
@@ -421,7 +360,6 @@ def plot_case_study(true, pred, save_dir=base_path):
     from utils import set_plot_style
     set_plot_style()
 
-    # ── 读取日期索引 ──
     df        = pd.read_csv(f"{save_dir}\\final_processed_data.csv", index_col=0,
                             parse_dates=True)
     df        = df.dropna()
@@ -429,35 +367,20 @@ def plot_case_study(true, pred, save_dir=base_path):
     val_end   = int(split_idx[1])
     WINDOW    = 60
 
-    # # 测试集对应的日期（滑窗后索引从 WINDOW 开始）
-    # test_dates = df.index[val_end + WINDOW:]
-    # n          = min(len(test_dates), len(true))
-    # test_dates = test_dates[:n]
-    # true       = true[:n]
-    # pred       = pred[:n]
-
-    # 替换原来的 test_dates 计算部分
     df = pd.read_csv(f"{save_dir}\\final_processed_data.csv",
                      index_col=0, parse_dates=True).dropna()
     split_idx = np.load(f"{save_dir}\\split_idx.npy")
     val_end = int(split_idx[1])
     WINDOW = 60
 
-    # 原始 df 中，测试集第一个样本对应的标签位置是 val_end + WINDOW
-    # 取从那里开始、长度等于 true 的日期序列
     test_start = val_end + WINDOW
     test_dates = df.index[test_start: test_start + len(true)]
-
-    # 保险：再做一次长度对齐
     n = min(len(test_dates), len(true), len(pred))
     test_dates = test_dates[:n]
     true = true[:n]
     pred = pred[:n]
 
-    # 打印确认
-    print(f"✅ 测试集日期: {test_dates[0].date()} → {test_dates[-1].date()}，共 {n} 个交易日")
-
-    # ── 定义两个高波动事件区间 ──
+    print(f" 测试集日期: {test_dates[0].date()} → {test_dates[-1].date()}，共 {n} 个交易日")
 
     events = [
         {
@@ -490,17 +413,14 @@ def plot_case_study(true, pred, save_dir=base_path):
         true_ev  = true[mask]
         pred_ev  = pred[mask]
 
-        # —— 主曲线 ——
         ax.plot(dates_ev, true_ev, label='True Volatility',
                 color='#000080', lw=2.2, zorder=3)
         ax.plot(dates_ev, pred_ev, label='Trans-TCN Pred',
                 color=ev["color"], lw=2, alpha=0.85, linestyle='--', zorder=3)
 
-        # —— 误差填充 ——
         ax.fill_between(dates_ev, true_ev, pred_ev,
                         alpha=0.12, color=ev["color"], label='Error')
 
-        # —— 局部指标 ——
         ss_res = np.sum((true_ev - pred_ev) ** 2)
         ss_tot = np.sum((true_ev - np.mean(true_ev)) ** 2)
         r2_ev  = 1 - ss_res / (ss_tot + 1e-12)
@@ -524,10 +444,9 @@ def plot_case_study(true, pred, save_dir=base_path):
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
     plt.close()
-    print(f"✅ Case study 图已保存：{save_path}")
+    print(f"Case study 图已保存：{save_path}")
 
-    # ── 打印两段区间的局部指标（论文用）──
-    print("\n📊 Case Study 局部指标：")
+    print("\nCase Study 局部指标：")
     print(f"{'Event':<30} | {'N':>5} | {'R²':>8} | {'RMSE':>12} | {'MAE':>12}")
     print("-" * 75)
     for ev in events:
@@ -543,38 +462,29 @@ def plot_case_study(true, pred, save_dir=base_path):
         print(f"  {ev['label']:<28} | {mask.sum():>5} | {r2:>8.4f} | "
               f"{rmse:>12.4e} | {mae:>12.4e}")
 
-# ==========================
-# 主程序
-# ==========================
 if __name__ == '__main__':
-    print(f"✅ Device: {device}")
-    print(f"✅ Features: {N_FEATURES}")
+    print(f" Device: {device}")
+    print(f" Features: {N_FEATURES}")
 
-    # 1. 加载数据
     train_loader, val_loader, test_loader = load_data()
     scaler_y = joblib.load(os.path.join(base_path, "scaler_y.pkl"))
 
-    # 2. 训练
-    print("\n── 训练中 ──")
+    print("\n 训练中")
     model = GatedFusionModel(feature_dim=N_FEATURES)
     model = train_model(model, train_loader, val_loader)
 
-    # 3. 推理
     preds_s, targets_s, gates, attn_w = predict(model, test_loader)
     p_real = inverse_transform(preds_s,   scaler_y)
     t_real = inverse_transform(targets_s, scaler_y)
 
-    # 4. 指标
     metrics = compute_all_metrics(t_real, p_real)
     rw      = random_walk_pred(t_real)
     dm_r    = dm_test(t_real, p_real, rw)
     dm_h    = dm_test_hac(t_real, p_real, rw)
     print_metrics("Trans-TCN (Ours)", metrics, dm_raw=dm_r, dm_hac=dm_h)
 
-    # 5. DM 对比表
     run_dm_table(t_real, p_real)
 
-    # 6. 绘图
     plot_pred_vs_true(t_real, p_real, "Trans-TCN",
                       f"{base_path}\\Pred_vs_True.pdf")
     plot_zoom(t_real, p_real)
@@ -582,23 +492,21 @@ if __name__ == '__main__':
     plot_attn_heatmap(attn_w)
     plot_rmse_bar(t_real, p_real)
 
-    # 7. 窗口敏感性图（从真实实验结果中加载；先跑 sensitivity_experiment.py）
     sens_path = os.path.join(base_path, "window_sensitivity_results.npy")
     if os.path.exists(sens_path):
         res = np.load(sens_path, allow_pickle=True).item()
-        print(res.keys())  # 看清楚键名再用
+        print(res.keys())
 
         plot_window_sensitivity([10, 20, 30, 60, 120], res['R2'], res['QLike'])
     else:
-        print("⚠️  窗口敏感性结果未找到，请先运行 sensitivity_experiment.py")
+        print("先运行6_sensitivity.py")
 
     plot_case_study(t_real, p_real)
 
-    # 8. 保存预测
     np.save(os.path.join(base_path, "preds_trans_tcn.npy"), p_real)
     pd.DataFrame(p_real, columns=['Pred']).to_csv(
         f"{base_path}\\submission_Final.csv", index=False)
     np.save(os.path.join(base_path, "test_alphas.npy"), attn_w)  # 已有 attn_w
     np.save(os.path.join(base_path, "test_gates.npy"), gates)  # 已有 gates
 
-    print("\n🎉 全部完成！")
+    print("\n 全部完成！")

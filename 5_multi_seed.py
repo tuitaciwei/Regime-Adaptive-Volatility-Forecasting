@@ -1,16 +1,5 @@
 """
 5_multi_seed.py
-===============
-多种子实验：评估模型稳定性，避免 cherry-picking 质疑
-- 对主模型 Trans-TCN 跑 N 个随机种子
-- 报告均值 ± 标准差（CIKM 投稿标准）
-- 同时对关键消融变体（w/o Attn）跑多种子，验证组件贡献可靠性
-- 生成论文级别箱线图和表格
-
-运行：
-    python 5_multi_seed.py                   # 主模型 5 种子
-    python 5_multi_seed.py --seeds 10        # 主模型 10 种子
-    python 5_multi_seed.py --ablation        # 同时跑消融对比
 """
 
 import argparse
@@ -29,18 +18,12 @@ from utils import (set_seed, set_plot_style,
                    compute_all_metrics, dm_test, dm_test_hac,
                    random_walk_pred)
 
-# ==========================
-# 配置
-# ==========================
 device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 base_path = r"D:\CIKM"
 N_FEAT    = 17
 
 DEFAULT_SEEDS = [42, 1029, 52, 305, 1002]
 
-# ==========================
-# 模型定义（完整主模型，与主文件完全一致）
-# ==========================
 class FeatureAttention(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -99,7 +82,6 @@ class GatedFusionModel(nn.Module):
         g  = self.gate(torch.cat([ht, htc], dim=-1))
         return self.out(g * ht + (1-g) * htc), g
 
-# 消融变体：无特征注意力（最关键消融）
 class M_NoAttn(nn.Module):
     def __init__(self, dim=N_FEAT):
         super().__init__()
@@ -112,9 +94,6 @@ class M_NoAttn(nn.Module):
         g  = self.gate(torch.cat([ht, htc], dim=-1))
         return self.out(g * ht + (1-g) * htc), g
 
-# ==========================
-# 数据加载（一次性，所有种子共用）
-# ==========================
 def load_data():
     def _np(p): return np.load(os.path.join(base_path, p))
     return (_np("X_train.npy"), _np("X_val.npy"),   _np("X_test.npy"),
@@ -128,9 +107,6 @@ def make_loaders(X_tr, X_vl, X_te, y_tr, y_vl, y_te):
             batch_size=32, shuffle=shuffle)
     return _dl(X_tr,y_tr,True), _dl(X_vl,y_vl,False), _dl(X_te,y_te,False)
 
-# ==========================
-# 单次训练（给定 seed）
-# ==========================
 def train_one_seed(ModelClass, train_loader, val_loader, seed,
                    save_name, epochs=100, lr=5e-5):
     set_seed(seed)
@@ -168,12 +144,9 @@ def train_one_seed(ModelClass, train_loader, val_loader, seed,
                 break
 
     model.load_state_dict(torch.load(path, map_location=device))
-    if os.path.exists(path): os.remove(path)   # 清理临时文件
+    if os.path.exists(path): os.remove(path)
     return model
 
-# ==========================
-# 单次评估
-# ==========================
 def eval_one(model, test_loader, scaler_y):
     model.eval()
     preds, targets = [], []
@@ -186,9 +159,6 @@ def eval_one(model, test_loader, scaler_y):
     t = np.exp(scaler_y.inverse_transform(np.concatenate(targets))).flatten()
     return t, p
 
-# ==========================
-# 多种子主循环
-# ==========================
 def run_multi_seed(ModelClass, seeds, label, data):
     X_tr, X_vl, X_te, y_tr, y_vl, y_te = data
     scaler_y = joblib.load(os.path.join(base_path, "scaler_y.pkl"))
@@ -198,7 +168,7 @@ def run_multi_seed(ModelClass, seeds, label, data):
     seed_records = []
 
     print(f"\n{'='*65}")
-    print(f"🔁  Multi-Seed Experiment: {label}")
+    print(f" Multi-Seed Experiment: {label}")
     print(f"    Seeds: {seeds}")
     print(f"{'='*65}")
 
@@ -210,7 +180,6 @@ def run_multi_seed(ModelClass, seeds, label, data):
         metrics = compute_all_metrics(t_real, p_real)
         all_metrics.append(metrics)
 
-        # DM vs 随机游走
         rw = random_walk_pred(t_real)
         dm_stat, dm_p = dm_test_hac(t_real, p_real, rw)
         sig = "***" if dm_p < 0.001 else "**" if dm_p < 0.01 else "*" if dm_p < 0.05 else "n.s."
@@ -243,7 +212,7 @@ def summarize(label, all_metrics, seed_records):
              for k in keys}
 
     print(f"\n{'='*65}")
-    print(f"📊  Summary: {label}")
+    print(f"  Summary: {label}")
     print(f"{'='*65}")
     print(f"  {'Metric':<8} | {'Mean':>10} | {'Std':>10} | {'Min':>10} | {'Max':>10}")
     print(f"  {'-'*8}-+-{'-'*10}-+-{'-'*10}-+-{'-'*10}-+-{'-'*10}")
@@ -253,22 +222,16 @@ def summarize(label, all_metrics, seed_records):
               f"{s['min']:>10.4f} | {s['max']:>10.4f}")
     print(f"{'='*65}")
 
-    # ── 论文用一行格式 ──
-    print(f"\n  📝 论文写法（均值 ± 标准差）：")
+
+    print(f"\n   （均值 ± 标准差）：")
     for k in keys:
         s = stats[k]
         print(f"     {k}: {s['mean']:.4f} ± {s['std']:.4f}")
 
     return stats
 
-# ==========================
-# 绘图
-# ==========================
 def plot_seed_results(results_dict, save_path):
-    """
-    results_dict: { label: [metrics_list] }
-    对每个指标画箱线图，横轴是模型变体，纵轴是指标值
-    """
+
     set_plot_style()
     metrics_to_plot = ["R2", "QLike", "RMSE", "DA"]
     n_metrics = len(metrics_to_plot)
@@ -295,7 +258,7 @@ def plot_seed_results(results_dict, save_path):
         ax.set_ylabel(metric)
         ax.grid(alpha=0.3, axis='y')
 
-        # 标出均值
+
         for i, vals in enumerate(data_to_plot):
             ax.scatter(i + 1, np.mean(vals), marker='D',
                        color='black', zorder=5, s=30, label='Mean' if i == 0 else '')
@@ -306,13 +269,10 @@ def plot_seed_results(results_dict, save_path):
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show(); plt.close()
-    print(f"  ✅ 箱线图已保存：{save_path}")
+    print(f"   箱线图已保存：{save_path}")
 
 def plot_seed_bar(seed_records_dict, metric="R2", save_path=None):
-    """
-    每个 seed 的逐 seed 指标柱状图
-    seed_records_dict: { label: [records] }
-    """
+
     set_plot_style()
     n_models = len(seed_records_dict)
     fig, ax  = plt.subplots(figsize=(max(10, 3 * n_models), 5))
@@ -345,11 +305,8 @@ def plot_seed_bar(seed_records_dict, metric="R2", save_path=None):
         save_path = os.path.join(base_path, f"MultiSeed_{metric}.pdf")
     plt.savefig(save_path, dpi=300)
     plt.show(); plt.close()
-    print(f"  ✅ 逐种子柱状图已保存：{save_path}")
+    print(f"   逐种子柱状图已保存：{save_path}")
 
-# ==========================
-# 保存 CSV（方便写论文时查阅）
-# ==========================
 def save_seed_table(seed_records_dict, filepath):
     rows = []
     for label, records in seed_records_dict.items():
@@ -359,18 +316,12 @@ def save_seed_table(seed_records_dict, filepath):
             rows.append(row)
     df = pd.DataFrame(rows)
     df.to_csv(filepath, index=False)
-    print(f"  ✅ 详细结果已保存：{filepath}")
+    print(f"  详细结果已保存：{filepath}")
 
-# ==========================
-# 论文级汇总表（均值 ± 标准差）
-# ==========================
 def print_paper_table(all_stats):
-    """
-    all_stats: { label: stats_dict }
-    输出可直接复制到 LaTeX 的格式
-    """
+
     print(f"\n{'='*80}")
-    print("📝 论文表格格式（均值 ± 标准差）")
+    print("（均值 ± 标准差）")
     print(f"{'='*80}")
     print(f"{'Model':<30} | {'R² ↑':>16} | {'QLike ↓':>16} | {'RMSE ↓':>16} | {'DA ↑':>10}")
     print("-" * 80)
@@ -386,9 +337,7 @@ def print_paper_table(all_stats):
         r2 = stats['R2']
         print(f"  {label}: $R^2 = {r2['mean']:.4f} \\pm {r2['std']:.4f}$")
 
-# ==========================
-# 主程序
-# ==========================
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--seeds',    type=int, default=5,
@@ -400,10 +349,9 @@ if __name__ == '__main__':
     seeds = DEFAULT_SEEDS[:args.seeds]
     data  = load_data()
 
-    print(f"✅ 设备: {device}")
-    print(f"✅ 种子: {seeds}")
+    print(f"设备: {device}")
+    print(f"种子: {seeds}")
 
-    # —— 主模型多种子 ——
     main_metrics, main_records = run_multi_seed(
         GatedFusionModel, seeds, "Trans-TCN (Ours)", data)
     main_stats = summarize("Trans-TCN (Ours)", main_metrics, main_records)
@@ -412,7 +360,6 @@ if __name__ == '__main__':
     all_records_dict = {"Trans-TCN": main_records}
     all_stats_dict   = {"Trans-TCN": main_stats}
 
-    # —— 消融变体多种子（可选）——
     if args.ablation:
         noattn_metrics, noattn_records = run_multi_seed(
             M_NoAttn, seeds, "w/o Attn", data)
@@ -422,23 +369,18 @@ if __name__ == '__main__':
         all_records_dict["w/o Attn"] = noattn_records
         all_stats_dict["w/o Attn"]   = noattn_stats
 
-    # —— 汇总打印 ——
     print_paper_table(all_stats_dict)
 
-    # —— 绘图 ——
     box_path = os.path.join(base_path, "MultiSeed_Boxplot.pdf")
     plot_seed_results(all_metrics_dict, box_path)
     plot_seed_bar(all_records_dict, metric="R2")
     plot_seed_bar(all_records_dict, metric="QLike")
 
-    # —— 保存 CSV ——
     csv_path = os.path.join(base_path, "multi_seed_results.csv")
     save_seed_table(all_records_dict, csv_path)
 
-    # —— 保存 npy（供其他脚本引用）——
     np.save(os.path.join(base_path, "multi_seed_stats.npy"), all_stats_dict)
 
-    print("\n🎉 多种子实验完成！")
+    print("\n  多种子实验完成！")
     print(f"   箱线图   → MultiSeed_Boxplot.pdf")
     print(f"   详细结果 → multi_seed_results.csv")
-    print(f"   论文写法见上方 '📝 论文表格格式' 输出")

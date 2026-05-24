@@ -1,14 +1,5 @@
 """
 6_sensitivity.py
-================
-窗口敏感性实验：验证 window=60 是最优选择
-- 对 [10, 20, 30, 60, 120] 五个窗口完整跑一遍
-- 每次重新构建数据集（滑窗大小不同）、训练、评估
-- 结果保存 npy，供主模型 plot_window_sensitivity() 调用
-- 生成论文级三联图（R² / QLike / RMSE）
-
-运行：python 6_sensitivity.py
-     python 6_sensitivity.py --windows 10 20 30 60 120   （自定义窗口）
 """
 
 import argparse
@@ -27,10 +18,7 @@ warnings.filterwarnings("ignore")
 
 from utils import set_seed, set_plot_style, compute_all_metrics
 
-# ==========================
-# 配置
-# ==========================
-SEED      = 42          # 唯一变量是窗口，其他全部固定
+SEED      = 42
 device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 base_path = r"D:\CIKM"
 
@@ -44,9 +32,6 @@ FEATURES = [
 TARGET   = "VOLATILITY"
 N_FEAT   = len(FEATURES)
 
-# ==========================
-# 模型（与主模型完全相同）
-# ==========================
 class FeatureAttention(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -105,27 +90,19 @@ class GatedFusionModel(nn.Module):
         g  = self.gate(torch.cat([ht, htc], dim=-1))
         return self.out(g * ht + (1-g) * htc), g
 
-# ==========================
-# 针对给定 window 重新构建数据集
-# ==========================
 def build_for_window(window):
-    """
-    从 final_processed_data.csv 重新滑窗
-    只有 window 不同，其余（特征列/标准化/划分比例）完全一致
-    """
+
     df   = pd.read_csv(os.path.join(base_path, "final_processed_data.csv"),
                        index_col=0).dropna()
     X_raw = df[FEATURES].values
     y_raw = df[TARGET].values.reshape(-1, 1)
 
-    # 滑窗
     Xw, yl = [], []
     for i in range(len(X_raw) - window):
         Xw.append(X_raw[i:i+window])
         yl.append(y_raw[i+window])
     Xw = np.array(Xw); yl = np.array(yl)
 
-    # 时序划分
     n       = len(Xw)
     tr_end  = int(n * 0.7)
     vl_end  = int(n * 0.8)
@@ -134,7 +111,6 @@ def build_for_window(window):
     X_vl, y_vl = Xw[tr_end:vl_end],  yl[tr_end:vl_end]
     X_te, y_te = Xw[vl_end:],        yl[vl_end:]
 
-    # 标准化（只 fit train）
     sx = StandardScaler(); sy = StandardScaler()
     sx.fit(X_tr.reshape(-1, N_FEAT)); sy.fit(y_tr)
 
@@ -153,9 +129,6 @@ def build_for_window(window):
 
     return dl(X_tr_s,y_tr_s,True), dl(X_vl_s,y_vl_s,False), dl(X_te_s,y_te_s,False), sy
 
-# ==========================
-# 训练
-# ==========================
 def train(model, tr, vl, window, epochs=100):
     model.to(device)
     crit = nn.HuberLoss(delta=0.1)
@@ -197,9 +170,6 @@ def train(model, tr, vl, window, epochs=100):
     if os.path.exists(path): os.remove(path)
     return model
 
-# ==========================
-# 评估
-# ==========================
 def evaluate(model, te, sy):
     model.eval(); preds, targets = [], []
     with torch.no_grad():
@@ -211,9 +181,6 @@ def evaluate(model, te, sy):
     t = np.exp(sy.inverse_transform(np.concatenate(targets))).flatten()
     return compute_all_metrics(t, p)
 
-# ==========================
-# 绘图（三联图，学术规范）
-# ==========================
 def plot_sensitivity(windows, results, save_path):
     set_plot_style()
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
@@ -247,14 +214,11 @@ def plot_sensitivity(windows, results, save_path):
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show(); plt.close()
-    print(f"✅ 敏感性分析图已保存：{save_path}")
+    print(f" 敏感性分析图已保存：{save_path}")
 
-# ==========================
-# 打印表格
-# ==========================
 def print_table(windows, results):
     print(f"\n{'='*75}")
-    print("📊 Window Sensitivity Results")
+    print(" Window Sensitivity Results")
     print(f"{'='*75}")
     print(f"  {'Window':<8} | {'R² ↑':>10} | {'QLike ↓':>10} | "
           f"{'RMSE ↓':>12} | {'MAE ↓':>12} | {'DA ↑':>8}")
@@ -270,12 +234,9 @@ def print_table(windows, results):
     print(f"{'='*75}")
     print(f"  ✓ = best in column")
     best_w = windows[int(np.argmax(results['R2']))]
-    print(f"\n  ✅ 最优窗口（R² 最高）: {best_w} 个交易日")
-    print(f"     与主模型 window=60 {'一致 ✅' if best_w == 60 else '不一致，建议更新主模型配置'}")
+    print(f"\n  最优窗口（R² 最高）: {best_w} 个交易日")
+    print(f"     与主模型 window=60 {'一致 ' if best_w == 60 else '不一致，建议更新主模型配置'}")
 
-# ==========================
-# 主程序
-# ==========================
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--windows', type=int, nargs='+',
@@ -283,15 +244,15 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     windows = args.windows
-    print(f"✅ 设备: {device}")
-    print(f"✅ 测试窗口: {windows}")
-    print(f"✅ 固定种子: {SEED}（唯一变量是窗口大小）\n")
+    print(f"设备: {device}")
+    print(f"测试窗口: {windows}")
+    print(f"固定种子: {SEED}（唯一变量是窗口大小）\n")
 
     results = {k: [] for k in ['R2', 'QLike', 'RMSE', 'MAE', 'DA']}
 
     for w in windows:
         print(f"\n{'─'*55}")
-        print(f"🔄  Window = {w}")
+        print(f"Window = {w}")
         print(f"{'─'*55}")
         set_seed(SEED)
 
@@ -305,13 +266,13 @@ if __name__ == '__main__':
         for k in results:
             results[k].append(metrics[k])
 
-        print(f"  ✅ R²={metrics['R2']:.4f} | QLike={metrics['QLike']:.4f} | "
+        print(f"R²={metrics['R2']:.4f} | QLike={metrics['QLike']:.4f} | "
               f"RMSE={metrics['RMSE']:.2e} | DA={metrics['DA']:.2f}%")
 
     # —— 保存原始结果（主模型 plot_window_sensitivity() 直接 load 此文件）——
     save_path = os.path.join(base_path, "window_sensitivity_results.npy")
     np.save(save_path, results)
-    print(f"\n✅ 原始结果已保存：{save_path}")
+    print(f"\n 原始结果已保存：{save_path}")
     print(f"   主模型调用方式：")
     print(f"   res = np.load('window_sensitivity_results.npy', allow_pickle=True).item()")
     print(f"   plot_window_sensitivity({windows}, res['R2'], res['QLike'])")
@@ -323,4 +284,4 @@ if __name__ == '__main__':
     fig_path = os.path.join(base_path, "Window_Sensitivity.pdf")
     plot_sensitivity(windows, results, fig_path)
 
-    print("\n🎉 窗口敏感性实验完成！")
+    print("\n窗口敏感性实验完成！")

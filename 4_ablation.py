@@ -1,15 +1,5 @@
 """
 4_ablation.py
-=============
-消融实验：系统验证主模型各组件的贡献
-共 6 个变体，对比维度：
-  A. 特征维度：17维(全) vs 13维(无高级特征)
-  B. 融合机制：有门控 vs 无门控(Concat)
-  C. 特征注意力：有 vs 无
-  D. 骨干网络：TCN vs BiLSTM
-
-运行：python 4_ablation.py
-     python 4_ablation.py --variant no_attn   （只跑某个变体）
 """
 
 import argparse
@@ -25,17 +15,11 @@ warnings.filterwarnings("ignore")
 from utils import (set_seed, compute_all_metrics, print_metrics,
                    dm_test, dm_test_hac, random_walk_pred)
 
-# ==========================
-# 配置
-# ==========================
 set_seed(42)
 device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 base_path = r"D:\CIKM"
 N_FEAT    = 17
 
-# ==========================
-# 公共组件（与主模型完全相同）
-# ==========================
 class FeatureAttention(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -89,13 +73,8 @@ class BiLSTM(nn.Module):
         out, _ = self.lstm(x)
         return self.linear(out[:, -1, :])
 
-# ==========================
-# 六个消融变体
-# ==========================
-
-# ── 完整模型（对照组，与主模型完全一致）──
 class M_Full(nn.Module):
-    """Trans-TCN + FeatureAttn + Gate（完整）"""
+
     def __init__(self, dim=N_FEAT):
         super().__init__()
         self.fa   = FeatureAttention(dim)
@@ -108,9 +87,8 @@ class M_Full(nn.Module):
         g = self.gate(torch.cat([self.tr(x), self.tcn(x)], dim=-1))
         return self.out(g * self.tr(x) + (1-g) * self.tcn(x))
 
-# ── A. 无特征注意力 ──
 class M_NoAttn(nn.Module):
-    """Trans-TCN + Gate，去掉 FeatureAttention"""
+
     def __init__(self, dim=N_FEAT):
         super().__init__()
         self.tr   = LightweightTransformer(dim)
@@ -121,9 +99,8 @@ class M_NoAttn(nn.Module):
         g = self.gate(torch.cat([self.tr(x), self.tcn(x)], dim=-1))
         return self.out(g * self.tr(x) + (1-g) * self.tcn(x))
 
-# ── B. 无门控（Concat 融合）──
 class M_NoGate(nn.Module):
-    """Trans-TCN + FeatureAttn，门控换为 Concat"""
+
     def __init__(self, dim=N_FEAT):
         super().__init__()
         self.fa  = FeatureAttention(dim)
@@ -134,9 +111,8 @@ class M_NoGate(nn.Module):
         x = self.fa(x)
         return self.out(torch.cat([self.tr(x), self.tcn(x)], dim=-1))
 
-# ── C. 仅用13维基础特征（无高级特征 VIX_ROC / RET_VOL_INTERACT / RV_5 / RV_22）──
 class M_13Feats(nn.Module):
-    """Trans-TCN + FeatureAttn + Gate，输入改为13维"""
+
     def __init__(self, dim=13):
         super().__init__()
         self.fa   = FeatureAttention(dim)
@@ -150,9 +126,8 @@ class M_13Feats(nn.Module):
         g  = self.gate(torch.cat([ht, htc], dim=-1))
         return self.out(g * ht + (1-g) * htc)
 
-# ── D. 骨干替换：BiLSTM 替代 TCN（有门控）──
 class M_TransBiLSTM(nn.Module):
-    """Trans-BiLSTM + FeatureAttn + Gate"""
+
     def __init__(self, dim=N_FEAT):
         super().__init__()
         self.fa     = FeatureAttention(dim)
@@ -166,9 +141,8 @@ class M_TransBiLSTM(nn.Module):
         g  = self.gate(torch.cat([ht, hl], dim=-1))
         return self.out(g * ht + (1-g) * hl)
 
-# ── E. 骨干替换：BiLSTM 替代 TCN（无门控）──
 class M_TransBiLSTM_NoGate(nn.Module):
-    """Trans-BiLSTM + FeatureAttn + Concat"""
+
     def __init__(self, dim=N_FEAT):
         super().__init__()
         self.fa     = FeatureAttention(dim)
@@ -179,9 +153,6 @@ class M_TransBiLSTM_NoGate(nn.Module):
         x = self.fa(x)
         return self.out(torch.cat([self.tr(x), self.bilstm(x)], dim=-1))
 
-# ==========================
-# 训练 + 评估（统一接口）
-# ==========================
 def _make_loader(X, y, shuffle):
     return DataLoader(TensorDataset(
         torch.tensor(X, dtype=torch.float32),
@@ -238,9 +209,6 @@ def eval_variant(model, te_loader, scaler_y):
     t = np.exp(scaler_y.inverse_transform(np.concatenate(targets))).flatten()
     return t, p
 
-# ==========================
-# 单个变体的完整运行
-# ==========================
 VARIANTS = {
     "full":              (M_Full,              N_FEAT, "ablation_full.pth",
                           "完整模型（对照）"),
@@ -261,7 +229,7 @@ def run_variant(key):
 
     scaler_y = joblib.load(os.path.join(base_path, "scaler_y.pkl"))
 
-    # 加载数据（13维变体截取前13列）
+
     X_tr = np.load(os.path.join(base_path, "X_train.npy"))
     X_vl = np.load(os.path.join(base_path, "X_val.npy"))
     X_te = np.load(os.path.join(base_path, "X_test.npy"))
@@ -289,12 +257,10 @@ def run_variant(key):
                   dm_hac=dm_test_hac(t_real, p_real, rw))
     return key, metrics
 
-# ==========================
-# 汇总打印（论文表格格式）
-# ==========================
+
 def print_summary_table(all_results):
     print("\n" + "=" * 90)
-    print("📊 Ablation Study Summary Table")
+    print("Ablation Study Summary Table")
     print("=" * 90)
     print(f"{'Variant':<35} | {'R²':>8} | {'QLike':>8} | {'MAE':>10} | {'RMSE':>10} | {'DA':>8}")
     print("-" * 90)
@@ -305,9 +271,6 @@ def print_summary_table(all_results):
               f"{m['MAE']:>10.6f} | {m['RMSE']:>10.6f} | {m['DA']:>8.2f}%{marker}")
     print("=" * 90)
 
-# ==========================
-# 入口
-# ==========================
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--variant', type=str, default='all',

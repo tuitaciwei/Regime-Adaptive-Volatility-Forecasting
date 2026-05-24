@@ -1,10 +1,5 @@
 """
 3_baselines.py
-==============
-所有 baseline 统一文件：GARCH / HAR-RV / BiLSTM / TCN / Transformer
-- 统一使用 utils.py 的指标和 DM 检验（QLIKE-based）
-- 统一的数据加载、训练、评估接口
-- 运行：python 3_baselines.py --model [garch|har|bilstm|tcn|transformer|all]
 """
 
 import argparse
@@ -22,17 +17,11 @@ warnings.filterwarnings("ignore")
 from utils import (set_seed, compute_all_metrics, print_metrics,
                    dm_test, dm_test_hac, random_walk_pred, plot_pred_vs_true)
 
-# ==========================
-# 配置
-# ==========================
 set_seed(42)
 device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 base_path = r"D:\CIKM"
 N_FEAT    = 17
 
-# ==========================
-# 公共：数据加载
-# ==========================
 def load_tensors():
     def _t(p, unsq=False):
         arr = torch.tensor(np.load(p), dtype=torch.float32)
@@ -53,9 +42,6 @@ def make_loaders(X_tr, X_vl, X_te, y_tr, y_vl, y_te, bs=32):
 def inverse(arr, scaler_y):
     return np.exp(scaler_y.inverse_transform(arr)).flatten()
 
-# ==========================
-# 公共：神经网络训练循环
-# ==========================
 def train_nn(model, train_loader, val_loader, save_name,
              epochs=150, lr=5e-5):
     model.to(device)
@@ -106,9 +92,6 @@ def train_nn(model, train_loader, val_loader, save_name,
     model.load_state_dict(torch.load(save_path, map_location=device))
     return model
 
-# ==========================
-# 公共：神经网络评估
-# ==========================
 def eval_nn(model, test_loader, scaler_y):
     model.eval()
     preds, targets = [], []
@@ -120,9 +103,6 @@ def eval_nn(model, test_loader, scaler_y):
     t_real = inverse(np.concatenate(targets), scaler_y)
     return t_real, p_real
 
-# ==========================
-# 公共：打印 + 保存
-# ==========================
 def report_and_save(name, t_real, p_real, save_file):
     metrics = compute_all_metrics(t_real, p_real)
     rw      = random_walk_pred(t_real)
@@ -130,12 +110,9 @@ def report_and_save(name, t_real, p_real, save_file):
     dm_h    = dm_test_hac(t_real, p_real, rw)
     print_metrics(name, metrics, dm_raw=dm_r, dm_hac=dm_h)
     np.save(os.path.join(base_path, save_file), p_real)
-    print(f"  ✅ 预测已保存：{save_file}\n")
+    print(f"预测已保存：{save_file}\n")
     return metrics
 
-# ============================================================
-# BASELINE 1：GARCH(1,1) — Expanding Window
-# ============================================================
 def run_garch():
     from arch import arch_model
 
@@ -172,9 +149,6 @@ def run_garch():
     print(f"\n  GARCH 预测均值: {preds.mean():.8f} | 真实均值: {t_real.mean():.8f}")
     report_and_save("GARCH(1,1) — Expanding Window", t_real, preds, "preds_garch.npy")
 
-# ============================================================
-# BASELINE 2：HAR-RV — Expanding Window
-# ============================================================
 def run_har():
     split_idx = np.load(os.path.join(base_path, "split_idx.npy"))
     val_end   = int(split_idx[1])
@@ -212,9 +186,6 @@ def run_har():
 
     report_and_save("HAR-RV — Expanding Window", t_real, preds, "preds_har.npy")
 
-# ============================================================
-# BASELINE 3：Enhanced BiLSTM
-# ============================================================
 class EnhancedBiLSTM(nn.Module):
     def __init__(self, feature_dim=N_FEAT, hidden_dim=128):
         super().__init__()
@@ -240,9 +211,6 @@ def run_bilstm():
     t_real, p_real = eval_nn(model, te, scaler_y)
     report_and_save("Enhanced BiLSTM", t_real, p_real, "preds_bilstm.npy")
 
-# ============================================================
-# BASELINE 4：Pure TCN
-# ============================================================
 class Chomp1d(nn.Module):
     def __init__(self, s): super().__init__(); self.s = s
     def forward(self, x): return x[:, :, :-self.s].contiguous()
@@ -281,9 +249,6 @@ def run_tcn():
     t_real, p_real = eval_nn(model, te, scaler_y)
     report_and_save("Pure TCN", t_real, p_real, "preds_tcn.npy")
 
-# ============================================================
-# BASELINE 5：Pure Transformer（FIXED：DM 改为 QLIKE-based）
-# ============================================================
 class PureTransformer(nn.Module):
     def __init__(self, feature_dim=N_FEAT, d_model=128, nhead=4):
         super().__init__()
@@ -304,21 +269,11 @@ def run_transformer():
     model  = PureTransformer(feature_dim=N_FEAT)
     model  = train_nn(model, tr, vl, "best_model_Transformer.pth")
     t_real, p_real = eval_nn(model, te, scaler_y)
-    # ✅ DM 统一使用 QLIKE（原来是 MSE，已修正）
+
     report_and_save("Pure Transformer (FIXED)", t_real, p_real, "preds_transformer.npy")
 
-# ==========================
-# 补充到 3_baselines.py 末尾
-# 在 if __name__ == '__main__': 的最后调用 run_efficiency_comparison()
-# 依赖：所有 baseline 已经跑完并保存了 .pth 文件
-# ==========================
-
 def run_efficiency_comparison():
-    """
-    训练效率对比：参数量 + 训练时间 + 推理时间 + 测试集指标
-    所有模型统一在相同硬件环境下计时，保证公平性
-    结果输出论文表格格式
-    """
+
     import time
     import torch
     import numpy as np
@@ -332,7 +287,6 @@ def run_efficiency_comparison():
     set_plot_style()
     scaler_y = joblib.load(os.path.join(base_path, "scaler_y.pkl"))
 
-    # ── 加载数据（只需要一次）──
     X_tr = torch.tensor(np.load(os.path.join(base_path, "X_train.npy")), dtype=torch.float32)
     X_vl = torch.tensor(np.load(os.path.join(base_path, "X_val.npy")),   dtype=torch.float32)
     X_te = torch.tensor(np.load(os.path.join(base_path, "X_test.npy")),  dtype=torch.float32)
@@ -345,20 +299,17 @@ def run_efficiency_comparison():
     val_loader   = DataLoader(TensorDataset(X_vl, y_vl), batch_size=32, shuffle=False)
     test_loader  = DataLoader(TensorDataset(X_te, y_te), batch_size=32, shuffle=False)
 
-    # ── 定义所有要统计的神经网络模型 ──
-    # GARCH 和 HAR-RV 单独处理（非神经网络）
     nn_models = {
         "BiLSTM":      EnhancedBiLSTM(feature_dim=N_FEAT),
         "TCN":         PureTCN(feature_dim=N_FEAT),
         "Transformer": PureTransformer(feature_dim=N_FEAT),
-        "Trans-TCN\n(Ours)": None,   # 从主模型文件加载
+        "Trans-TCN\n(Ours)": None,
     }
 
-    # 导入主模型
+
     import sys
     sys.path.insert(0, base_path)
 
-    # 直接在此处重定义主模型（避免循环导入）
     class FeatureAttention(torch.nn.Module):
         def __init__(self, dim):
             super().__init__()
@@ -418,12 +369,10 @@ def run_efficiency_comparison():
 
     nn_models["Trans-TCN\n(Ours)"] = MainModel()
 
-    # ── 统计函数 ──
     def count_params(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     def time_training(model, train_loader, val_loader, max_epochs=30):
-        """计时：固定跑 max_epochs 轮，取平均每 epoch 时间 × 实际收敛 epoch 数估算"""
         model.to(device)
         crit = torch.nn.HuberLoss(delta=0.1)
         opt  = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-4)
@@ -449,7 +398,7 @@ def run_efficiency_comparison():
         return elapsed / max_epochs   # 每 epoch 平均秒数
 
     def time_inference(model, test_loader):
-        """推理时间：整个测试集跑一遍"""
+
         model.eval()
         model.to(device)
         if torch.cuda.is_available():
@@ -464,7 +413,6 @@ def run_efficiency_comparison():
         return (time.perf_counter() - t0) * 1000   # ms
 
     def get_test_metrics(model_name):
-        """从已保存的预测文件读取指标（避免重复训练）"""
         fname_map = {
             "BiLSTM":           "preds_bilstm.npy",
             "TCN":              "preds_tcn.npy",
@@ -484,10 +432,8 @@ def run_efficiency_comparison():
         n = min(len(preds), len(targets))
         return compute_all_metrics(targets[:n], preds[:n])
 
-    # ── 主统计循环 ──
     records = []
 
-    # 统计神经网络模型
     for name, model in nn_models.items():
         print(f"  ⏱  统计 {name.replace(chr(10),' ')} ...")
         set_seed(42)
@@ -509,7 +455,6 @@ def run_efficiency_comparison():
         print(f"     Params={n_params:,} | {sec_per_epoch:.2f}s/ep | "
               f"{infer_ms:.1f}ms | R²={records[-1]['R2']:.4f}")
 
-    # 统计 GARCH 和 HAR-RV（无参数量，只计推理时间）
     stat_models = {
         "GARCH":   "preds_garch.npy",
         "HAR-RV":  "preds_har.npy",
@@ -526,7 +471,7 @@ def run_efficiency_comparison():
         metrics = compute_all_metrics(targets[:n], preds[:n])
         records.append({
             "Model":        name,
-            "#Params":      0,        # 统计模型无神经网络参数
+            "#Params":      0,
             "Train(s/ep)":  float('nan'),
             "Infer(ms)":    float('nan'),
             "R2":           metrics["R2"],
@@ -534,9 +479,8 @@ def run_efficiency_comparison():
             "RMSE":         metrics["RMSE"],
         })
 
-    # ── 打印论文格式表格 ──
     print("\n" + "=" * 95)
-    print("📊 Efficiency & Performance Comparison Table")
+    print("Efficiency & Performance Comparison Table")
     print("=" * 95)
     print(f"  {'Model':<22} | {'#Params':>10} | {'Train(s/ep)':>12} | "
           f"{'Infer(ms)':>10} | {'R²↑':>8} | {'QLike↓':>8} | {'RMSE↓':>12}")
@@ -554,13 +498,11 @@ def run_efficiency_comparison():
     print("  ★ = proposed model")
     print("  N/A = statistical model, no gradient-based training")
 
-    # ── 保存 CSV ──
     df = pd.DataFrame(records)
     csv_path = os.path.join(base_path, "efficiency_comparison.csv")
     df.to_csv(csv_path, index=False)
-    print(f"\n  ✅ 效率对比已保存：{csv_path}")
+    print(f"\n 效率对比已保存：{csv_path}")
 
-    # ── 绘图：参数量 vs R² 气泡图 ──
     set_plot_style()
     fig, ax = plt.subplots(figsize=(9, 6))
 
@@ -597,9 +539,8 @@ def run_efficiency_comparison():
     bubble_path = os.path.join(base_path, "Efficiency_Bubble.pdf")
     plt.savefig(bubble_path, dpi=300)
     plt.show(); plt.close()
-    print(f"  ✅ 气泡图已保存：{bubble_path}")
+    print(f"气泡图已保存：{bubble_path}")
 
-    # ── 绘图：训练时间柱状图（神经网络模型）──
     nn_records = [r for r in records if not np.isnan(r['Train(s/ep)'])]
     names  = [r['Model'].replace("\n"," ") for r in nn_records]
     times  = [r['Train(s/ep)'] for r in nn_records]
@@ -618,24 +559,8 @@ def run_efficiency_comparison():
     bar_path = os.path.join(base_path, "Efficiency_TrainTime.pdf")
     plt.savefig(bar_path, dpi=300)
     plt.show(); plt.close()
-    print(f"  ✅ 训练时间柱状图已保存：{bar_path}")
+    print(f"训练时间柱状图已保存：{bar_path}")
 
-
-# ==========================
-# 在 3_baselines.py 的 if __name__ == '__main__': 最后加入：
-#
-#   print("\n" + "="*65)
-#   print("📊 Running: EFFICIENCY COMPARISON")
-#   print("="*65)
-#   run_efficiency_comparison()
-#
-# ==========================
-
-
-
-# ==========================
-# 入口
-# ==========================
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='all',
@@ -653,13 +578,13 @@ if __name__ == '__main__':
     if args.model == 'all':
         for name, fn in runners.items():
             print(f"\n{'='*65}")
-            print(f"🚀  Running: {name.upper()}")
+            print(f"Running: {name.upper()}")
             print(f"{'='*65}")
             fn()
     else:
         runners[args.model]()
 
     print("\n" + "="*65)
-    print("📊 Running: EFFICIENCY COMPARISON")
+    print("Running: EFFICIENCY COMPARISON")
     print("="*65)
     run_efficiency_comparison()
