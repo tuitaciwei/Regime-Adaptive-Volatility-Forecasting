@@ -11,7 +11,7 @@ Download SPY OHLCV from Yahoo Finance and macro series
 Place in the base directory and update `base_path` in each script.
 
 ## Usage
-Run scripts in order:
+Run scripts:
 1_data_preprocess.py  → feature engineering and windowing
 2_model_Trans_TCN.py  → train and evaluate Trans-TCN
 3_baselines.py        → train all baselines
